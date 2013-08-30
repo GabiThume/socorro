@@ -5,6 +5,7 @@
 import web
 import os
 
+from socorro.webapi.middleware import Middleware
 from socorro.webapi.classPartial import classWithPartialInit
 
 from configman import Namespace, RequiredConfig
@@ -33,7 +34,8 @@ class WebServerBase(RequiredConfig):
         web.webapi.internalerror = web.debugerror
         web.config.debug = False
         self._identify()
-        self._wsgi_func = web.application(self.urls, globals()).wsgifunc()
+        app = web.application(self.urls, globals())
+        self._wsgi_func = app.wsgifunc(Middleware)
 
     #--------------------------------------------------------------------------
     def run(self):

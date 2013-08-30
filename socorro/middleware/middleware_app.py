@@ -13,7 +13,6 @@
 import re
 import json
 import web
-from statsd import StatsClient
 from socorro.app.generic_app import App, main
 from socorro.external import (
     MissingOrBadArgumentError,
@@ -73,10 +72,6 @@ DONT_TERM_SPLIT = re.compile("""
 # application.  The value is set in the App's 'main' function below.  Only the
 # modwsgi Apache version actually makes use of this variable.
 application = None
-
-statsd = StatsClient(host='localhost',
-                     port=8125,
-                     prefix='')
 
 
 class ImplementationConfigurationError(Exception):
@@ -295,27 +290,6 @@ class MiddlewareApp(App):
         default=''
     )
 
-    #--------------------------------------------------------------------------
-    # statsd namespace
-    #     the namespace is for statsd metrics
-    #--------------------------------------------------------------------------
-    required_config.namespace('statsd')
-    required_config.statsd.add_option(
-        'statsd_host',
-        doc='the hostname of statsd',
-        default='localhost'
-    )
-    required_config.statsd.add_option(
-        'statsd_port',
-        doc='the port number for statsd',
-        default=8125
-    )
-    required_config.statsd.add_option(
-        'prefix',
-        doc='a string to be used as the prefix for statsd names',
-        default=''
-    )
-
     # because the socorro.webapi.servers classes bring up their own default
     # configurations like port number, the only way to override the default
     # is like this:
@@ -399,11 +373,11 @@ class ImplementationWrapper(JsonWebServiceBase):
             try:
                 base_module_path = implementations[impl_code]
             except KeyError:
-                status = BadRequest()
-                self.process_response(request, status)
-                raise BadRequest(
+                status = BadRequest(
                     'Implementation code "%s" does not exist' % impl_code
                 )
+                #self.process_response(request, status)
+                raise status
 
             try:
                 module = __import__(
@@ -413,13 +387,12 @@ class ImplementationWrapper(JsonWebServiceBase):
                     [class_name]
                 )
             except ImportError:
-                status = BadRequest()
-                self.process_response(request, status)
-
-                raise BadRequest(
+                status = BadRequest(
                     "Unable to import %s.%s.%s (implementation code is %s)" %
                     (base_module_path, file_name, class_name, impl_code)
                 )
+                #self.process_response(request, status)
+                raise status 
             instance = getattr(module, class_name)(config=self.context)
         else:
             instance = self.cls(config=self.context)
@@ -428,8 +401,6 @@ class ImplementationWrapper(JsonWebServiceBase):
         default_method = kwargs.pop('default_method', 'get')
         if default_method not in ('get', 'post', 'put', 'delete'):
             raise ValueError('%s not a recognized method' % default_method)
-        if args == (u'',):
-            request = kwargs
         method_name = default_method
         if len(args) > 1:
             method_name = args[0]
@@ -465,35 +436,35 @@ class ImplementationWrapper(JsonWebServiceBase):
                     'The method %r does not exist on %r' %
                     (method_name, instance)
                 )
-                status = web.webapi.NoMethod()
-                self.process_response(request, status)
-                raise web.webapi.NoMethod(instance)
+                status = web.webapi.NoMethod(instance)
+                #self.process_response(request, status)
+                raise status
         try:
             result = method(**params)
             if isinstance(result, tuple):
                 web.header('Content-Type', result[1])
                 status = web.ctx.status
-                self.process_response(request, status)
+                #self.process_response(request, status)
                 return result[0]
             web.header('Content-Type', 'application/json')
             dumped = json.dumps(result)
             web.header('Content-Length', len(dumped))
             status = web.ctx.status
-            self.process_response(request, status)
+            #self.process_response(request, status)
             return dumped
 
         except MissingOrBadArgumentError, msg:
-            status = BadRequest()
-            self.process_response(request, status)
-            raise BadRequest(str(msg))
+            status = BadRequest(str(msg))
+            #self.process_response(request, status)
+            raise status
         except ResourceNotFound, msg:
-            status = web.webapi.NotFound()
-            self.process_response(request, status)
-            raise web.webapi.NotFound(str(msg))
+            status = web.webapi.NotFound(str(msg))
+            #self.process_response(request, status)
+            raise status
         except ResourceUnavailable, msg:
-            status = Timeout()
-            self.process_response(request, status)
-            raise Timeout(str(msg))
+            status = Timeout(str(msg))
+            #self.process_response(request, status)
+            raise status
         except Exception, msg:
             if self.context.sentry and self.context.sentry.dsn:
                 client = raven.Client(dsn=self.context.sentry.dsn)
@@ -502,7 +473,7 @@ class ImplementationWrapper(JsonWebServiceBase):
                     'Error captured in Sentry. Reference: %s' % identifier
                 )
                 status = 500
-                self.process_response(request, status)
+                #self.process_response(request, status)
             raise
 
     def POST(self, *args, **kwargs):
@@ -606,32 +577,6 @@ class ImplementationWrapper(JsonWebServiceBase):
 
         assert isinstance(value, basestring)
         return convert(value)
-
-    def process_response(self, request, status):
-
-        status_code = str(status).rsplit(' ')[0]
-        request_path = ""
-
-        if len(request) == 0:
-            request_path = 'whyempty?'
-        elif isinstance(request, dict):
-            request_path = "/".join(request.keys()) + "/"
-            items = tuple(request.items()[0][1])
-            request_path = request_path + "/".join(items)
-        elif isinstance(request, tuple):
-            request_path = "/".join(request)
-        else:
-            pass
-
-        request_path = request_path.replace("%2B", "+").replace("%2F", "/")
-
-        metric = "socorro.{0}.{1}".format(
-            request_path.strip('/').encode().replace('.', '-'),
-            str(status_code).rsplit(' ')[0]
-        )
-
-        print metric
-        statsd.incr(metric)
 
 if __name__ == '__main__':
     main(MiddlewareApp)
