@@ -142,6 +142,11 @@ class SocorroCommon(object):
             raise ValueError(method)
 
         resp = request_method(url=url, auth=auth, headers=headers, data=data)
+
+        from crashstats.crashstats.socorro_middleware import SocorroMiddleware
+        internal_middleware = SocorroMiddleware()
+        internal_middleware.process_response(method, url, resp.status_code)
+
         if not resp.status_code == 200:
             raise BadStatusCodeError('%s: on: %s' % (resp.status_code, url))
 
